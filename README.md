@@ -22,10 +22,13 @@ Backend Flask que proporciona una API REST para interactuar con contratos inteli
 ## ✨ Características
 
 - 🔗 **Integración con Stacks Blockchain**: Lee y ejecuta funciones de contratos inteligentes en Clarity
+- 💸 **Transferencias de STX**: Sistema completo para transferir STX entre wallets
 - 🤖 **IA con DeepSeek**: Interpreta comandos en lenguaje natural y los convierte en acciones sobre el contrato
 - 🌐 **API REST**: Endpoints simples y bien documentados
 - 🔒 **CORS habilitado**: Listo para integrarse con frontends web
 - 📊 **Parseo inteligente**: Convierte respuestas de Clarity a formatos legibles
+- 💰 **Consulta de balances**: Verifica el balance de cualquier wallet en Stacks
+- ✅ **Verificación de transacciones**: Monitorea el estado de transacciones en tiempo real
 - 🛠️ **Fácil configuración**: Variables de entorno mediante archivo `.env`
 
 ## 🔧 Requisitos Previos
@@ -166,32 +169,123 @@ POST http://127.0.0.1:5000/chat
 Content-Type: application/json
 
 {
-  "message": "incrementa el contador"
+  "message": "Transfiere 50 STX a ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6"
 }
 ```
 
 **Response:**
 ```json
 {
-  "action": "increment",
-  "message": "Voy a incrementar el contador en 1."
+  "action": "transfer",
+  "recipient": "ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6",
+  "amount": 50,
+  "message": "Transferir 50 STX a la wallet ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6"
 }
 ```
 
 **Acciones posibles:**
+- `"transfer"`: Transferir STX a otra wallet
+- `"balance"`: Consultar balance de una wallet
 - `"increment"`: Incrementar el contador
 - `"read"`: Leer el valor actual
 - `"none"`: Ninguna acción específica
 
 **Ejemplos de mensajes:**
 
-| Mensaje del usuario | Acción detectada |
-|---------------------|------------------|
-| "incrementa el contador" | `increment` |
-| "suma 1" | `increment` |
-| "cuánto vale el contador" | `read` |
-| "dame el valor actual" | `read` |
-| "hola" | `none` |
+| Mensaje del usuario | Acción detectada | Datos extraídos |
+|---------------------|------------------|-----------------|
+| "Transfiere 50 STX a ST2..." | `transfer` | amount: 50, recipient: ST2... |
+| "¿Cuál es el balance de ST1...?" | `balance` | address: ST1... |
+| "incrementa el contador" | `increment` | - |
+| "cuánto vale el contador" | `read` | - |
+
+---
+
+### 4. **POST /get-balance** - Consultar Balance
+
+Consulta el balance de STX de una dirección específica.
+
+**Request:**
+```bash
+POST http://127.0.0.1:5000/get-balance
+Content-Type: application/json
+
+{
+  "address": "ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6"
+}
+```
+
+**Response:**
+```json
+{
+  "address": "ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6",
+  "balance": 125.5,
+  "balance_microstx": 125500000,
+  "message": "Balance: 125.5 STX"
+}
+```
+
+---
+
+### 5. **POST /prepare-transfer** - Preparar Transferencia
+
+Prepara los datos necesarios para ejecutar una transferencia de STX desde el frontend.
+
+**Request:**
+```bash
+POST http://127.0.0.1:5000/prepare-transfer
+Content-Type: application/json
+
+{
+  "sender": "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM",
+  "recipient": "ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6",
+  "amount": 50
+}
+```
+
+**Response:**
+```json
+{
+  "contract_address": "ST3AQ7KXWA7KGQ67EX2MFYR1E3231B9S4KY6EFB1R",
+  "contract_name": "traspaso-v2",
+  "function_name": "transfer-stx",
+  "function_args": ["'ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6", "u50000000"],
+  "sender": "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM",
+  "recipient": "ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6",
+  "amount": 50,
+  "amount_microstx": 50000000,
+  "network": "testnet",
+  "message": "¿Deseas aprobar la transferencia de 50 STX a ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6?"
+}
+```
+
+---
+
+### 6. **POST /check-transaction** - Verificar Transacción
+
+Verifica el estado de una transacción en la blockchain de Stacks.
+
+**Request:**
+```bash
+POST http://127.0.0.1:5000/check-transaction
+Content-Type: application/json
+
+{
+  "txid": "0x123456789abcdef..."
+}
+```
+
+**Response:**
+```json
+{
+  "txid": "0x123456789abcdef...",
+  "status": "success",
+  "block_height": 12345,
+  "block_hash": "0xabc...",
+  "explorer_url": "https://explorer.hiro.so/txid/0x123456789abcdef...?chain=testnet",
+  "message": "✅ Transacción completada correctamente"
+}
+```
 
 ---
 
@@ -200,11 +294,12 @@ Content-Type: application/json
 ```
 clarity-backend/
 │
-├── app.py                  # Aplicación principal de Flask
-├── requirements.txt        # Dependencias de Python
-├── .env                    # Variables de entorno (NO subir a Git)
-├── .gitignore             # Archivos a ignorar en Git
-└── README.md              # Este archivo
+├── app.py                     # Aplicación principal de Flask
+├── requirements.txt           # Dependencias de Python
+├── .env                       # Variables de entorno (NO subir a Git)
+├── .gitignore                # Archivos a ignorar en Git
+├── README.md                 # Documentación principal
+└── INTEGRATION_GUIDE.md      # Guía de integración con frontend
 ```
 
 ---
@@ -227,6 +322,16 @@ Este proyecto utiliza las siguientes tecnologías:
 
 ## 🔍 Detalles Técnicos
 
+### Contrato de Transferencias STX
+
+El backend interactúa con el contrato desplegado en:
+- **Dirección**: `ST3AQ7KXWA7KGQ67EX2MFYR1E3231B9S4KY6EFB1R.traspaso-v2`
+- **Red**: Testnet/Mainnet (configurable)
+
+**Funciones del contrato:**
+- `transfer-stx(recipient, amount)`: Transferir STX entre wallets
+- `get-balance(address)`: Consultar balance de una dirección
+
 ### Parseo de Respuestas de Clarity
 
 El contrato inteligente en Stacks devuelve valores en formato Clarity:
@@ -237,15 +342,20 @@ El contrato inteligente en Stacks devuelve valores en formato Clarity:
 
 El backend realiza el parseo automático de estos formatos para devolver números enteros naturales.
 
+### Conversión STX ↔ microSTX
+
+- **1 STX** = 1,000,000 microSTX
+- El contrato trabaja con microSTX internamente
+- El backend convierte automáticamente entre ambos formatos
+
 ### Integración con DeepSeek
 
-La IA de DeepSeek se configura con un prompt de sistema específico:
+La IA de DeepSeek se configura con un prompt de sistema específico que le permite:
 
-```
-"Eres un asistente para interpretar comandos hacia un contrato inteligente 
-en la blockchain de Stacks. Devuelve SIEMPRE una respuesta JSON con las claves: 
-'action' (por ejemplo: 'increment', 'read', 'none') y 'message' (explicación breve)."
-```
+1. Interpretar comandos en lenguaje natural
+2. Extraer parámetros (montos, direcciones)
+3. Identificar la acción a realizar (transfer, balance, etc.)
+4. Devolver respuestas estructuradas en JSON
 
 Esto garantiza respuestas estructuradas y predecibles.
 

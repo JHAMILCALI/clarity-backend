@@ -20,6 +20,10 @@ CONTRACT_NAME = os.getenv("CONTRACT_NAME")
 NETWORK = os.getenv("STACKS_NETWORK", "testnet")
 STACKS_API = "https://api.testnet.hiro.so" if NETWORK == "testnet" else "https://api.hiro.so"
 
+# Contrato de transferencias STX
+TRANSFER_CONTRACT_ADDRESS = "ST3AQ7KXWA7KGQ67EX2MFYR1E3231B9S4KY6EFB1R"
+TRANSFER_CONTRACT_NAME = "traspaso-v2"
+
 # DeepSeek API
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
@@ -116,9 +120,18 @@ def chat():
                 {
                     "role": "system",
                     "content": (
-                        "Eres un asistente para interpretar comandos hacia un contrato inteligente "
-                        "en la blockchain de Stacks. Devuelve SIEMPRE una respuesta JSON con las claves: "
-                        "'action' (por ejemplo: 'increment', 'read', 'none') y 'message' (explicación breve)."
+                        "Eres un asistente para interpretar comandos hacia contratos inteligentes "
+                        "en la blockchain de Stacks. Analiza los comandos del usuario y extrae información sobre transferencias de STX. "
+                        "Devuelve SIEMPRE una respuesta JSON con las siguientes claves:\n"
+                        "- 'action': puede ser 'transfer', 'balance', 'increment', 'read', o 'none'\n"
+                        "- 'message': explicación breve de lo que se hará\n"
+                        "- 'recipient': dirección del destinatario (solo si action es 'transfer')\n"
+                        "- 'amount': cantidad de STX a transferir (solo si action es 'transfer')\n\n"
+                        "Ejemplos:\n"
+                        "Usuario: 'Transfiere 50 STX a ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6'\n"
+                        "Respuesta: {\"action\": \"transfer\", \"recipient\": \"ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6\", \"amount\": 50, \"message\": \"Transferir 50 STX a la wallet ST2PQHQ0EYR93KSP0B6AN9AHEJ1K3EBRJP02HPGK6\"}\n\n"
+                        "Usuario: '¿Cuál es el balance de ST1234...?'\n"
+                        "Respuesta: {\"action\": \"balance\", \"address\": \"ST1234...\", \"message\": \"Consultando balance de la wallet\"}"
                     )
                 },
                 {"role": "user", "content": user_message}
@@ -155,7 +168,11 @@ def chat():
             # Si no es JSON, intentar deducir la acción
             action = "none"
             msg_lower = user_message.lower()
-            if "incrementa" in msg_lower or "aumenta" in msg_lower:
+            if "transferir" in msg_lower or "transfiere" in msg_lower or "enviar" in msg_lower:
+                action = "transfer"
+            elif "balance" in msg_lower or "saldo" in msg_lower:
+                action = "balance"
+            elif "incrementa" in msg_lower or "aumenta" in msg_lower:
                 action = "increment"
             elif "contador" in msg_lower or "valor" in msg_lower:
                 action = "read"
@@ -166,6 +183,164 @@ def chat():
 
     except Exception as e:
         return jsonify({"action": "none", "message": f"Error: {str(e)}"}), 500
+
+
+# ======================================
+# 💰 Verificar balance de una wallet
+# ======================================
+@app.route("/get-balance", methods=["POST"])
+def get_balance():
+    """Consulta el balance de STX de una dirección."""
+    try:
+        data = request.get_json()
+        address = data.get("address", "")
+        
+        if not address:
+            return jsonify({"error": "Se requiere una dirección"}), 400
+        
+        # Validar formato de dirección
+        if not (address.startswith("ST") or address.startswith("SP")):
+            return jsonify({"error": "Dirección inválida. Debe comenzar con ST o SP"}), 400
+        
+        # Llamar a la función read-only del contrato
+        url = f"{STACKS_API}/v2/contracts/call-read/{TRANSFER_CONTRACT_ADDRESS}/{TRANSFER_CONTRACT_NAME}/get-balance"
+        payload = {
+            "sender": address,
+            "arguments": [f"'{address}"]
+        }
+        
+        response = requests.post(url, json=payload)
+        result = response.json()
+        
+        # Parsear el resultado
+        import re
+        result_raw = result.get("result", "")
+        
+        # Extraer el balance (formato: "ok u123456")
+        match = re.search(r'u(\d+)', result_raw)
+        if match:
+            balance_microstx = int(match.group(1))
+            balance_stx = balance_microstx / 1_000_000  # Convertir de microSTX a STX
+        else:
+            balance_stx = 0
+        
+        return jsonify({
+            "address": address,
+            "balance": balance_stx,
+            "balance_microstx": balance_microstx if match else 0,
+            "message": f"Balance: {balance_stx} STX"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ======================================
+# 💸 Preparar transacción de transferencia
+# ======================================
+@app.route("/prepare-transfer", methods=["POST"])
+def prepare_transfer():
+    """Prepara los datos para una transferencia de STX."""
+    try:
+        data = request.get_json()
+        recipient = data.get("recipient", "")
+        amount = data.get("amount", 0)
+        sender = data.get("sender", "")
+        
+        # Validaciones
+        if not recipient or not sender:
+            return jsonify({
+                "error": "Se requieren las direcciones del remitente y destinatario"
+            }), 400
+        
+        if not (recipient.startswith("ST") or recipient.startswith("SP")):
+            return jsonify({
+                "error": "Dirección del destinatario inválida. Debe comenzar con ST o SP"
+            }), 400
+        
+        if amount <= 0:
+            return jsonify({
+                "error": "El monto debe ser mayor a 0 STX"
+            }), 400
+        
+        # Convertir STX a microSTX (1 STX = 1,000,000 microSTX)
+        amount_microstx = int(amount * 1_000_000)
+        
+        # Preparar los datos de la transacción
+        transaction_data = {
+            "contract_address": TRANSFER_CONTRACT_ADDRESS,
+            "contract_name": TRANSFER_CONTRACT_NAME,
+            "function_name": "transfer-stx",
+            "function_args": [
+                f"'{recipient}",  # Principal del destinatario
+                f"u{amount_microstx}"  # Amount en microSTX
+            ],
+            "sender": sender,
+            "recipient": recipient,
+            "amount": amount,
+            "amount_microstx": amount_microstx,
+            "network": NETWORK,
+            "post_condition_mode": "allow",
+            "message": f"¿Deseas aprobar la transferencia de {amount} STX a {recipient}?"
+        }
+        
+        return jsonify(transaction_data)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ======================================
+# ✅ Verificar estado de transacción
+# ======================================
+@app.route("/check-transaction", methods=["POST"])
+def check_transaction():
+    """Verifica el estado de una transacción en la blockchain."""
+    try:
+        data = request.get_json()
+        txid = data.get("txid", "")
+        
+        if not txid:
+            return jsonify({"error": "Se requiere el ID de la transacción"}), 400
+        
+        # Consultar la transacción en la API de Stacks
+        url = f"{STACKS_API}/extended/v1/tx/{txid}"
+        response = requests.get(url)
+        
+        if response.status_code == 404:
+            return jsonify({
+                "status": "pending",
+                "message": "Transacción pendiente o no encontrada",
+                "txid": txid
+            })
+        
+        tx_data = response.json()
+        tx_status = tx_data.get("tx_status", "unknown")
+        
+        # Construir URL del explorer
+        explorer_base = "https://explorer.hiro.so"
+        chain = "mainnet" if NETWORK == "mainnet" else "testnet"
+        explorer_url = f"{explorer_base}/txid/{txid}?chain={chain}"
+        
+        result = {
+            "txid": txid,
+            "status": tx_status,
+            "block_height": tx_data.get("block_height"),
+            "block_hash": tx_data.get("block_hash"),
+            "explorer_url": explorer_url,
+        }
+        
+        if tx_status == "success":
+            result["message"] = "✅ Transacción completada correctamente"
+        elif tx_status == "pending":
+            result["message"] = "⏳ Transacción pendiente de confirmación"
+        else:
+            result["message"] = f"❌ Transacción fallida: {tx_status}"
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ==========================
